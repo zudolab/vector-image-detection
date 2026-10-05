@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "zfb dev",
     "dev:worker": "node scripts/dev-worker.mjs",
-    "typecheck": "pnpm run worker:types:check && tsc -b && zfb check",
+    "typecheck": "pnpm run worker:types:check && tsc -b && zfb check && zfb wind audit --plan build --fail-on warning",
     "prebuild": "node scripts/clean-output.mjs",
     "build": "tsc -b && zfb build",
     "preview": "zfb preview",
@@ -27,23 +27,19 @@
     "test:seed": "node --test scripts/seed-manifest.node-test.mjs && vitest run --config vitest.worker.config.ts src/worker/features/photos/seed.integration.worker.test.ts"
   },
   "dependencies": {
-    "@takazudo/zfb": "1.1.1",
-    "@takazudo/zfb-runtime": "1.1.1",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
+    "@takazudo/zfb": "3.2.0",
+    "@takazudo/zfb-runtime": "3.2.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.20.3",
     "@cloudflare/workers-types": "5.20260809.1",
     "@playwright/test": "1.62.1",
-    "@testing-library/react": "16.3.2",
     "@testing-library/user-event": "14.6.3",
     "@types/node": "^24.13.3",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "jsdom": "30.0.1",
     "sharp": "^0.35.3",
-    "wrangler": "4.120.0"
+    "wrangler": "4.120.0",
+    "happy-dom": "20.14.5",
+    "@testing-library/dom": "10.4.2"
   }
 }

@@ -1,9 +1,35 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { signal } from "@takazudo/zfb/zudo-react";
+import { createIslandTest, type IslandTest } from "@takazudo/zfb/zudo-react/testing";
+import { screen, waitFor } from "@testing-library/dom";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RelatedPhotosPanel } from "./RelatedPhotosPanel";
 import { ApiClientError, type PhotoLibraryClient } from "../lib/photo-library-client";
 import type { RelatedPhotoResult, RelatedPhotosResponse } from "../worker/contracts/api";
 import type { PhotoSummary } from "../worker/contracts/domain";
+
+const islands: IslandTest[] = [];
+async function renderPanel(client: PhotoLibraryClient, initialPhoto: PhotoSummary) {
+  const selectedPhoto = signal(initialPhoto);
+  function TestPanel() {
+    return (
+      <RelatedPhotosPanel
+        photo={selectedPhoto}
+        client={client}
+        onClose={() => undefined}
+        onOpenRelated={() => undefined}
+      />
+    );
+  }
+  const island = createIslandTest(TestPanel, {}, { document });
+  islands.push(island);
+  expect(island.hydrate()).not.toBeNull();
+  await island.flush();
+  expect(island.diagnostics).toEqual([]);
+  return { island, selectedPhoto };
+}
+afterEach(() => {
+  for (const island of islands.splice(0)) island.dispose();
+});
 
 const photo = (id: string, word: string): PhotoSummary => ({
   id,
@@ -78,14 +104,7 @@ describe("related photos panel", () => {
     const client = panelClient(async () =>
       page({ items: [neighbour("photo-2", "Kitten"), neighbour("photo-3", "Sofa", 0.71)] }),
     );
-    const view = render(
-      <RelatedPhotosPanel
-        photo={photo("photo-1", "Cat")}
-        client={client}
-        onClose={() => undefined}
-        onOpenRelated={() => undefined}
-      />,
-    );
+    const view = await renderPanel(client, photo("photo-1", "Cat"));
 
     expect(screen.getByRole("heading", { name: "Related by AI description" })).toBeTruthy();
     await waitFor(() => expect(panelState()).toBe("ready"));
@@ -93,7 +112,7 @@ describe("related photos panel", () => {
     expect(screen.getByRole("button", { name: "Show photos related to Sofa" })).toBeTruthy();
     expect(screen.getByText("0.71")).toBeTruthy();
     // Header thumbnail plus one per neighbour, all pointing at the media route.
-    const images = Array.from(view.container.querySelectorAll("img"));
+    const images = Array.from(view.island.host.querySelectorAll("img"));
     expect(images.map((image) => new URL(image.src).pathname)).toEqual([
       "/api/v1/photos/photo-1/media",
       "/api/v1/photos/photo-2/media",
@@ -111,13 +130,9 @@ describe("related photos panel", () => {
     const pending = new Promise<RelatedPhotosResponse>((resolve) => {
       release = resolve;
     });
-    render(
-      <RelatedPhotosPanel
-        photo={photo("photo-1", "Cat")}
-        client={panelClient(() => pending)}
-        onClose={() => undefined}
-        onOpenRelated={() => undefined}
-      />,
+    await renderPanel(
+      panelClient(() => pending),
+      photo("photo-1", "Cat"),
     );
 
     expect(panelState()).toBe("loading");
@@ -137,14 +152,7 @@ describe("related photos panel", () => {
     const client = panelClient(async () =>
       page({ degraded: true, degradedReason: "vector_pending" }),
     );
-    render(
-      <RelatedPhotosPanel
-        photo={photo("photo-1", "Cat")}
-        client={client}
-        onClose={() => undefined}
-        onOpenRelated={() => undefined}
-      />,
-    );
+    await renderPanel(client, photo("photo-1", "Cat"));
 
     await waitFor(() => expect(panelState()).toBe("not_indexed"));
     expect(screen.getByText(/Not indexed yet/)).toBeTruthy();
@@ -158,14 +166,7 @@ describe("related photos panel", () => {
     const client = panelClient(async () =>
       page({ degraded: true, degradedReason: "provider_unavailable" }),
     );
-    render(
-      <RelatedPhotosPanel
-        photo={photo("photo-1", "Cat")}
-        client={client}
-        onClose={() => undefined}
-        onOpenRelated={() => undefined}
-      />,
-    );
+    await renderPanel(client, photo("photo-1", "Cat"));
 
     await waitFor(() => expect(panelState()).toBe("provider_unavailable"));
     expect(screen.getByText(/Related photos are unavailable right now/)).toBeTruthy();
@@ -176,14 +177,7 @@ describe("related photos panel", () => {
 
   it("treats a degraded response with an unknown reason as an outage", async () => {
     const client = panelClient(async () => page({ degraded: true, degradedReason: null }));
-    render(
-      <RelatedPhotosPanel
-        photo={photo("photo-1", "Cat")}
-        client={client}
-        onClose={() => undefined}
-        onOpenRelated={() => undefined}
-      />,
-    );
+    await renderPanel(client, photo("photo-1", "Cat"));
     await waitFor(() => expect(panelState()).toBe("provider_unavailable"));
   });
 
@@ -191,14 +185,7 @@ describe("related photos panel", () => {
     const client = panelClient(async () => {
       throw new ApiClientError("Photo not found", "not_found", false, 404);
     });
-    render(
-      <RelatedPhotosPanel
-        photo={photo("photo-1", "Cat")}
-        client={client}
-        onClose={() => undefined}
-        onOpenRelated={() => undefined}
-      />,
-    );
+    await renderPanel(client, photo("photo-1", "Cat"));
     await waitFor(() => expect(panelState()).toBe("error"));
     expect(screen.getByText(/This photo is no longer available/)).toBeTruthy();
   });
@@ -208,14 +195,7 @@ describe("related photos panel", () => {
     client.getPhoto = async () => {
       throw new ApiClientError("Detail unavailable", "request_failed", true, 503);
     };
-    render(
-      <RelatedPhotosPanel
-        photo={photo("photo-1", "Cat")}
-        client={client}
-        onClose={() => undefined}
-        onOpenRelated={() => undefined}
-      />,
-    );
+    await renderPanel(client, photo("photo-1", "Cat"));
 
     await waitFor(() => expect(panelState()).toBe("ready"));
     expect(await screen.findByText(/The AI description could not be loaded/)).toBeTruthy();
@@ -225,26 +205,13 @@ describe("related photos panel", () => {
 
   it("moves focus to the panel so the narrow-screen stacked layout does not look inert", async () => {
     const client = panelClient(async () => page());
-    const view = render(
-      <RelatedPhotosPanel
-        photo={photo("photo-1", "Cat")}
-        client={client}
-        onClose={() => undefined}
-        onOpenRelated={() => undefined}
-      />,
-    );
+    const view = await renderPanel(client, photo("photo-1", "Cat"));
     const panel = screen.getByRole("complementary");
     expect(document.activeElement).toBe(panel);
 
     (document.body.querySelector("button") as HTMLButtonElement).focus();
-    view.rerender(
-      <RelatedPhotosPanel
-        photo={photo("photo-2", "Boat")}
-        client={client}
-        onClose={() => undefined}
-        onOpenRelated={() => undefined}
-      />,
-    );
+    view.selectedPhoto.value = photo("photo-2", "Boat");
+    await view.island.flush();
     expect(document.activeElement).toBe(screen.getByRole("complementary"));
   });
 
@@ -261,28 +228,17 @@ describe("related photos panel", () => {
         : Promise.resolve(page({ photoId, items: [neighbour("photo-9", "Harbour")] })),
     );
     const client = panelClient(relatedPhotos);
-    const view = render(
-      <RelatedPhotosPanel
-        photo={photo("photo-1", "Cat")}
-        client={client}
-        onClose={() => undefined}
-        onOpenRelated={() => undefined}
-      />,
-    );
+    const view = await renderPanel(client, photo("photo-1", "Cat"));
 
-    view.rerender(
-      <RelatedPhotosPanel
-        photo={photo("photo-2", "Boat")}
-        client={client}
-        onClose={() => undefined}
-        onOpenRelated={() => undefined}
-      />,
-    );
+    view.selectedPhoto.value = photo("photo-2", "Boat");
+    await view.island.flush();
     expect(
       await screen.findByRole("button", { name: "Show photos related to Harbour" }),
     ).toBeTruthy();
 
     releaseFirst(page({ items: [neighbour("photo-8", "Stale")] }));
+    await first;
+    await view.island.flush();
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Show photos related to Stale" })).toBeNull(),
     );
@@ -300,32 +256,40 @@ describe("related photos panel", () => {
     opener.focus();
     expect(document.activeElement).toBe(opener);
 
-    const view = render(
-      <RelatedPhotosPanel
-        photo={photo("photo-1", "Cat")}
-        client={client}
-        onClose={() => undefined}
-        onOpenRelated={() => undefined}
-      />,
-    );
+    const view = await renderPanel(client, photo("photo-1", "Cat"));
     await waitFor(() => expect(panelState()).toBe("ready"));
     expect(document.activeElement).not.toBe(opener);
 
-    view.unmount();
+    view.island.dispose();
     expect(document.activeElement).toBe(opener);
     opener.remove();
   });
 
+  it("aborts the active request on close and suppresses a late result", async () => {
+    let requestSignal: AbortSignal | undefined;
+    let release!: (response: RelatedPhotosResponse) => void;
+    const pending = new Promise<RelatedPhotosResponse>((resolve) => {
+      release = resolve;
+    });
+    const client = panelClient((_photoId, abortSignal) => {
+      requestSignal = abortSignal;
+      return pending;
+    });
+    const view = await renderPanel(client, photo("photo-1", "Cat"));
+    expect(requestSignal?.aborted).toBe(false);
+    const panel = screen.getByRole("complementary");
+    view.island.dispose();
+    expect(requestSignal?.aborted).toBe(true);
+    release(page({ items: [neighbour("photo-8", "Stale")] }));
+    await pending;
+    await view.island.flush();
+    expect(panel.textContent).not.toContain("Stale");
+    expect(screen.queryByRole("complementary")).toBeNull();
+  });
+
   it("never implies the system compares images to each other", async () => {
     const client = panelClient(async () => page({ items: [neighbour("photo-2", "Kitten")] }));
-    render(
-      <RelatedPhotosPanel
-        photo={photo("photo-1", "Cat")}
-        client={client}
-        onClose={() => undefined}
-        onOpenRelated={() => undefined}
-      />,
-    );
+    await renderPanel(client, photo("photo-1", "Cat"));
     await waitFor(() => expect(panelState()).toBe("ready"));
 
     const panel = screen.getByRole("complementary");
