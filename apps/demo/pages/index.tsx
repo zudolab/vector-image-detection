@@ -5,7 +5,7 @@ export default function DemoPage() {
   return (
     <html lang="en">
       <head>
-        <meta charSet="utf-8" />
+        <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta
           name="description"
@@ -15,13 +15,10 @@ export default function DemoPage() {
         <title>Public AI photo library</title>
       </head>
       <body>
-        {/* zfb's marker is transformed before React runs; its intentionally
-            opaque IslandElement is not structurally a React 19 ReactNode. */}
-        {/* @ts-expect-error zfb IslandElement is a build marker, not runtime JSX output */}
         <Island
           ssrFallback={
-            <main className="grid min-h-screen place-items-center px-md py-lg">
-              <p className="text-muted">Loading the photo library&hellip;</p>
+            <main class="grid min-h-screen place-items-center px-md py-lg">
+              <p class="text-muted">Loading the photo library&hellip;</p>
             </main>
           }
         >

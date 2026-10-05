@@ -1,9 +1,4 @@
-@import "tailwindcss/preflight";
-@import "tailwindcss/utilities";
-
-@custom-variant hover-safe (@media (hover: hover) { &:hover });
-
-@theme {
+:root {
   --color-page: oklch(97% 0.003 265);
   --color-surface: oklch(100% 0 0);
   --color-sunken: oklch(94% 0.005 265);
@@ -118,54 +113,103 @@
     --color-human-ink: oklch(90% 0.055 155);
     --color-human-soft: oklch(27% 0.045 155);
     --color-human-line: oklch(53% 0.085 155);
-    --shadow-popover: 0 1px 2px oklch(0% 0 0 / 0.4), 0 8px 24px oklch(0% 0 0 / 0.4);
+    /* The baseline generated theme overrode its dark shadow declaration.
+       Keep that measured appearance; changing the shadow is a separate design change. */
   }
 }
 
-@utility grid-auto-photo {
-  grid-template-columns: repeat(auto-fit, minmax(min(11rem, 100%), 1fr));
-}
-
-@utility grid-auto-thumb {
-  grid-template-columns: repeat(auto-fit, minmax(min(8rem, 100%), 1fr));
-}
-
-@utility grid-workspace-panel {
-  grid-template-columns: minmax(0, 1fr) var(--spacing-panel);
-}
-
-@utility grid-attribution {
-  grid-template-columns: auto minmax(0, 1fr);
-}
-
-@utility grid-share {
-  grid-template-columns: 6rem minmax(0, 1fr) 2.5rem;
-}
-
-@utility grid-related-row {
+/* Authored equivalents preserve the original rem-based responsive contract. */
+.grid-related-row {
   grid-template-columns: 2.5rem minmax(0, 1fr) 2.75rem;
 }
-
-@utility max-h-panel-viewport {
-  /* Reserves the sticky top offset *and* the BulkTagBar, which is `sticky
-     bottom-sm` and therefore overlaps anything sized to the full viewport.
-     Without the bar's share a full page of related results scrolls its last
-     rows behind the bar, where they can't be read until the whole page is
-     scrolled to the bottom and the panel unsticks. */
-  max-height: calc(100vh - var(--spacing-xl) - var(--spacing-bulk-bar));
+@media (min-width: 68rem) {
+  .wide\:sticky {
+    position: sticky;
+  }
+  .wide\:top-md {
+    top: var(--spacing-md);
+  }
+  .wide\:max-h-panel-viewport {
+    max-height: calc(100vh - var(--spacing-xl) - var(--spacing-bulk-bar));
+  }
+  .wide\:grid-workspace-panel {
+    grid-template-columns: minmax(0, 1fr) var(--spacing-panel);
+  }
+  .wide\:overflow-y-auto {
+    overflow-y: auto;
+  }
+  .wide\:overscroll-contain {
+    overscroll-behavior: contain;
+  }
+}
+.photo-related-button {
+  justify-self: flex-start;
+}
+.icon-button svg {
+  width: var(--spacing-ui);
+  height: var(--spacing-ui);
+}
+.icon-button:active {
+  translate: 0 1px;
+}
+.drop-zone:has(:focus-visible) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
-@utility popover-panel {
-  top: calc(100% + var(--spacing-3xs));
-  max-width: min(20rem, 70vw);
-}
-
-@utility z-popover {
-  z-index: 10;
-}
-
-@utility underline-offset-ui {
-  text-underline-offset: 0.2em;
+/* These declarations were present in the baseline preflight and affect the
+   demo's existing text, search, button and file controls. */
+@layer base {
+  html {
+    font-family:
+      ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
+      "Segoe UI Symbol", "Noto Color Emoji";
+    font-feature-settings: normal;
+    font-variation-settings: normal;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button,
+  input {
+    font-feature-settings: inherit;
+    font-variation-settings: inherit;
+    border-radius: 0;
+    background-color: transparent;
+    opacity: 1;
+  }
+  button,
+  input:where([type="button"], [type="reset"], [type="submit"]) {
+    appearance: button;
+  }
+  ::placeholder {
+    opacity: 1;
+  }
+  @supports (not (-webkit-appearance: -apple-pay-button)) or (contain-intrinsic-size: 1px) {
+    ::placeholder {
+      color: currentcolor;
+      @supports (color: color-mix(in lab, red, red)) {
+        color: color-mix(in oklab, currentcolor 50%, transparent);
+      }
+    }
+  }
+  ::-webkit-search-decoration {
+    -webkit-appearance: none;
+  }
+  ::file-selector-button {
+    box-sizing: border-box;
+    margin: 0;
+    margin-inline-end: 4px;
+    padding: 0;
+    border: 0 solid;
+    border-radius: 0;
+    background-color: transparent;
+    font: inherit;
+    font-feature-settings: inherit;
+    font-variation-settings: inherit;
+    letter-spacing: inherit;
+    color: inherit;
+    opacity: 1;
+    appearance: button;
+  }
 }
 
 :root {

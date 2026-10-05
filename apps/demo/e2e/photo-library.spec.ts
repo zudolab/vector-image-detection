@@ -90,7 +90,8 @@ test.beforeEach(async ({ page }) => {
     // RelatedPhotosPanel fetches it too (#72), sharing one request via
     // fetchPhotoDetail's cache — without a handler here every card render
     // hits the catch-all 500 below and fails every test's console-error guard.
-    const detailMatch = request.method() === "GET" && pathname.match(/^\/api\/v1\/photos\/([^/]+)$/);
+    const detailMatch =
+      request.method() === "GET" && pathname.match(/^\/api\/v1\/photos\/([^/]+)$/);
     if (detailMatch) {
       const photoId = detailMatch[1]!;
       return json({
@@ -324,4 +325,116 @@ test("keeps search usable while displaying server/readiness failure states", asy
     "Failed to load resource: the server responded with a status of 429 (Too Many Requests)",
   ]);
   current?.consoleErrors.splice(0);
+});
+
+test("keeps the related panel focused through a photo chain and restores its original opener", async ({
+  page,
+}) => {
+  const requestedPhotos: string[] = [];
+  await page.route("**/api/v1/photos/*/related?*", async (route) => {
+    const id = new URL(route.request().url()).pathname.split("/")[4]!;
+    requestedPhotos.push(id);
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        version: "v1",
+        photoId: id,
+        items:
+          id === "photo-1"
+            ? [
+                {
+                  photo: { ...photo, id: "photo-2", humanTags: [] },
+                  reason: { tier: "semantic", score: 0.87 },
+                },
+              ]
+            : [],
+        nextCursor: null,
+        degraded: false,
+        degradedReason: null,
+      }),
+    });
+  });
+  const opener = page.getByRole("button", {
+    name: "Show photos related to photo photo-1 by AI description",
+  });
+  await opener.focus();
+  await opener.press("Enter");
+  const panel = page.getByRole("complementary", { name: "Related by AI description" });
+  await expect(panel).toBeFocused();
+  const nextPhoto = panel.getByRole("button", { name: /^Show photos related to / });
+  await expect(nextPhoto).toHaveCount(1);
+  await nextPhoto.focus();
+  await nextPhoto.press("Enter");
+  await expect.poll(() => requestedPhotos).toEqual(["photo-1", "photo-2"]);
+  await expect(panel).toHaveAttribute("data-related-state", "ready");
+  await expect(panel).toBeFocused();
+  await expect(nextPhoto).toHaveCount(0);
+  await panel.getByRole("button", { name: "Close the related photos panel" }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(opener).toBeFocused();
+  await opener.press("Enter");
+  await expect(panel).toBeFocused();
+  await expect(panel.getByRole("button", { name: /^Show photos related to / })).toHaveCount(1);
+  await panel.getByRole("button", { name: "Close the related photos panel" }).click();
+  await expect(opener).toBeFocused();
+});
+
+test("accepts a dropped image through multipart upload and reaches its ready state", async ({
+  page,
+}) => {
+  const dataTransfer = await page.evaluateHandle(
+    (bytes) => {
+      const browser = globalThis as typeof globalThis & {
+        DataTransfer: new () => { items: { add(file: File): void } };
+      };
+      const transfer = new browser.DataTransfer();
+      transfer.items.add(
+        new File([new Uint8Array(bytes)], "dropped-cat.png", { type: "image/png" }),
+      );
+      return transfer;
+    },
+    [...pixel],
+  );
+  const dropZone = page.locator("label").filter({ has: page.getByLabel("Choose photos") });
+  const uploaded = page.waitForRequest(
+    (request) =>
+      new URL(request.url()).pathname === "/api/v1/photos" && request.method() === "POST",
+  );
+  await dropZone.dispatchEvent("dragenter", { dataTransfer });
+  await dropZone.dispatchEvent("dragover", { dataTransfer });
+  await dropZone.dispatchEvent("drop", { dataTransfer });
+  const request = await uploaded;
+  expect(request.headers()["content-type"]).toMatch(/^multipart\/form-data; boundary=/);
+  expect(request.postDataBuffer()?.toString()).toContain('filename="dropped-cat.png"');
+  await expect(page.getByLabel("Upload status")).toContainText("dropped-cat.png — Ready");
+  await expect(page.getByLabel("Upload status")).toContainText("Added to the public library");
+  await dataTransfer.dispose();
+});
+
+test("retains selection across search and updates keyed cards after tag mutations", async ({
+  page,
+}) => {
+  await page.getByLabel("Select photo photo-1").check();
+  await page.getByLabel("Words or description").fill("cat");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Human tag", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Select photo photo-1")).toBeChecked();
+  await expect(page.getByText("1 selected")).toBeVisible();
+  await page.getByRole("textbox", { name: "Human tag", exact: true }).fill("reviewed");
+  await page.getByRole("button", { name: "Attach human tag", exact: true }).click();
+  const firstCard = page
+    .locator("article")
+    .filter({ has: page.getByLabel("Select photo photo-1") });
+  await expect(firstCard.getByLabel("Human tags")).toContainText("Human · reviewed");
+  await expect(page.getByLabel("Select photo photo-1")).toBeChecked();
+  await page.getByRole("button", { name: "Clear search", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Latest photos" })).toBeVisible();
+  await expect(page.getByLabel("Select photo photo-1")).toBeChecked();
+  await expect(page.getByLabel("Human tags")).toContainText("Human · reviewed");
+  await page.getByRole("button", { name: "Remove human tag", exact: true }).click();
+  await expect(page.getByLabel("Human tags")).not.toContainText("Human · reviewed");
+  await expect(page.getByLabel("Select photo photo-1")).toBeChecked();
+  await page.getByRole("button", { name: "Clear selection", exact: true }).click();
+  await expect(page.getByLabel("Select photo photo-1")).not.toBeChecked();
+  await expect(page.getByText("0 selected")).toBeVisible();
 });

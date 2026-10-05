@@ -16,6 +16,7 @@
     "moduleDetection": "force",
     "noEmit": true,
     "jsx": "react-jsx",
+    "jsxImportSource": "@takazudo/zfb/zudo-react",
 
     /* Linting */
     "noUnusedLocals": true,

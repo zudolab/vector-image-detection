@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  computed,
+  For,
+  getScope,
+  Show,
+  signal,
+  type ReadonlySignal,
+  type Ref,
+} from "@takazudo/zfb/zudo-react";
 import {
   ApiClientError,
   fetchPhotoDetail,
@@ -37,15 +45,20 @@ export function RelatedPhotosPanel({
   onClose,
   onOpenRelated,
 }: {
-  photo: PhotoSummary;
+  photo: ReadonlySignal<PhotoSummary>;
   client: PhotoLibraryClient;
   onClose(): void;
   onOpenRelated(photo: PhotoSummary): void;
 }) {
-  const [state, setState] = useState<RelatedListState>(loadingState);
-  const [caption, setCaption] = useState<CaptionState>({ status: "loading" });
-  const panelRef = useRef<HTMLElement>(null);
-  const openerRef = useRef<HTMLElement | null>(null);
+  const scope = getScope();
+  const state = signal<RelatedListState>(loadingState);
+  const caption = signal<CaptionState>({ status: "loading" });
+  const panelRef: Ref<HTMLElement> = { current: null };
+  // Signals suppress equal writes; a computed ID still invalidates on tag updates.
+  const photoId = signal(photo.value.id);
+  scope.effect(() => {
+    photoId.value = photo.value.id;
+  });
 
   // Declared before the focus effect below so it captures the opener while it
   // is still the active element. Closing the panel only unmounts the focused
@@ -53,44 +66,44 @@ export function RelatedPhotosPanel({
   // after the entire gallery, so that strands a keyboard user at the gallery
   // bottom, far from the card they opened. Focus without `preventScroll` also
   // brings the originating card back into view.
-  useEffect(() => {
-    openerRef.current = document.activeElement as HTMLElement | null;
+  scope.onActivate(() => {
+    const opener = document.activeElement;
     return () => {
-      const opener = openerRef.current;
-      if (opener?.isConnected) opener.focus();
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
     };
-  }, []);
+  });
 
-  useEffect(() => {
+  scope.effect(() => {
+    const id = photoId.value;
     const controller = new AbortController();
     // Request token as well as the abort: a superseded response must be
     // discarded even when the client ignores the signal.
     let current = true;
-    setState(loadingState);
-    setCaption({ status: "loading" });
+    state.value = loadingState;
+    caption.value = { status: "loading" };
 
-    void client.relatedPhotos(photo.id, controller.signal).then(
+    void client.relatedPhotos(id, controller.signal).then(
       (response) => {
-        if (current) setState(listStateFor(response));
+        if (current) state.value = listStateFor(response);
       },
       (error: unknown) => {
         if (current && !isAbort(error))
-          setState({ status: "error", items: [], message: errorMessageFor(error) });
+          state.value = { status: "error", items: [], message: errorMessageFor(error) };
       },
     );
 
     // No signal: `fetchPhotoDetail` shares one in-flight request across every
     // caller for this photo, so aborting here would cancel the gallery card's
     // read too. The `current` token above is what discards a superseded response.
-    void fetchPhotoDetail(client, photo.id).then(
+    void fetchPhotoDetail(client, id).then(
       (photoDetail) => {
-        if (current) setCaption({ status: "ready", caption: photoDetail.aiCaption });
+        if (current) caption.value = { status: "ready", caption: photoDetail.aiCaption };
       },
       (error: unknown) => {
         // The AI description is context, not the payload — a failure must leave
         // a terminal note rather than an endless placeholder, and must never
         // hide the neighbours that did load.
-        if (current && !isAbort(error)) setCaption({ status: "unavailable" });
+        if (current && !isAbort(error)) caption.value = { status: "unavailable" };
       },
     );
 
@@ -98,18 +111,24 @@ export function RelatedPhotosPanel({
       current = false;
       controller.abort();
     };
-  }, [client, photo.id]);
+  });
 
   // Focus only on open / photo change — not when the list settles below, which
   // would steal focus back from anywhere the user moved it while waiting.
-  useEffect(() => {
+  scope.effect(() => {
+    void photoId.value;
     panelRef.current?.focus({ preventScroll: true });
-  }, [photo.id]);
+  });
 
   // Below the `wide` breakpoint the panel stacks after the whole gallery, so
   // opening it without moving the viewport reads as a dead click.
-  const listSettled = state.status !== "loading";
-  useEffect(() => {
+  const listSettled = signal(false);
+  scope.effect(() => {
+    listSettled.value = state.value.status !== "loading";
+  });
+  scope.effect(() => {
+    void photoId.value;
+    void listSettled.value;
     // Only scroll in the stacked layout — at `wide` and up the panel is a
     // sticky aside already beside the gallery, so scrolling to it just yanks
     // the page. `block: "start"` rather than `"nearest"`: nearest is the
@@ -124,89 +143,103 @@ export function RelatedPhotosPanel({
     // fold. The panel is always the last flow content, so this clamp would
     // otherwise happen on essentially every open.
     panelRef.current?.scrollIntoView?.({ block: "start" });
-  }, [photo.id, listSettled]);
+  });
 
   return (
     <aside
       ref={panelRef}
-      tabIndex={-1}
-      className="flex flex-col gap-md rounded-lg border border-line bg-surface p-md wide:sticky wide:top-md wide:max-h-panel-viewport wide:overflow-y-auto wide:overscroll-contain"
+      tabindex={-1}
+      class="flex flex-col gap-md rounded-lg border border-line bg-surface p-md wide:sticky wide:top-md wide:max-h-panel-viewport wide:overflow-y-auto wide:overscroll-contain"
       aria-labelledby="related-heading"
-      aria-busy={state.status === "loading"}
-      data-related-state={state.status}
+      aria-busy={computed(() => state.value.status === "loading")}
+      data-related-state={computed(() => state.value.status)}
     >
-      <header className="flex items-start justify-between gap-xs">
+      <header class="flex items-start justify-between gap-xs">
         <div>
-          <h2 id="related-heading" className="m-0 text-body font-semibold">
+          <h2 id="related-heading" class="m-0 text-body font-semibold">
             Related by AI description
           </h2>
-          <p className="mt-3xs mb-0 text-xs text-muted">
+          <p class="mt-3xs mb-0 text-xs text-muted">
             Photos whose AI caption, AI words, and human tags read closest to this one. The library
             never compares the images themselves.
           </p>
         </div>
         <button
           type="button"
-          className="grid min-h-control min-w-control shrink-0 cursor-pointer place-items-center rounded-md border border-line bg-surface text-muted hover-safe:bg-sunken active:translate-y-px [&_svg]:size-ui"
+          class="grid min-h-control min-w-control shrink-0 cursor-pointer place-items-center rounded-md border border-line bg-surface text-muted icon-button"
           aria-label="Close the related photos panel"
-          onClick={onClose}
+          on:click={onClose}
         >
           <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
             <path
               d="M4 4l8 8M12 4l-8 8"
               stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
+              stroke-width="1.6"
+              stroke-linecap="round"
             />
           </svg>
         </button>
       </header>
 
-      <div className="flex items-start gap-sm border-b border-line pb-md">
+      <div class="flex items-start gap-sm border-b border-line pb-md">
         <img
-          className="aspect-square h-auto w-thumb-lg rounded-sm bg-sunken object-cover"
-          src={photo.mediaUrl}
+          class="aspect-square h-auto w-thumb-lg rounded-sm bg-sunken object-cover"
+          src={computed(() => photo.value.mediaUrl)}
           alt=""
-          width={photo.width}
-          height={photo.height}
+          width={computed(() => photo.value.width)}
+          height={computed(() => photo.value.height)}
           decoding="async"
         />
-        <p className="m-0 min-w-0 text-xs text-muted">
-          <span className="block font-semibold text-ink">This photo&rsquo;s AI description</span>
-          {captionText(caption)}
+        <p class="m-0 min-w-0 text-xs text-muted">
+          <span class="block font-semibold text-ink">This photo&rsquo;s AI description</span>
+          {computed(() => captionText(caption.value))}
         </p>
       </div>
 
-      <div className="grid gap-sm" aria-live="polite">
-        {state.status === "loading" && (
-          <p className="m-0 text-sm text-muted">Finding photos with related descriptions&hellip;</p>
-        )}
-        {state.status === "not_indexed" && (
-          <StatusBanner tone="info">
-            <strong>Not indexed yet.</strong> This photo&rsquo;s AI description has not reached the
-            search index. That normally takes a few seconds after processing — reopen this panel
-            shortly.
-          </StatusBanner>
-        )}
-        {state.status === "provider_unavailable" && (
-          <StatusBanner tone="warning">
-            <strong>Related photos are unavailable right now.</strong> The vector index could not be
-            reached, so this list is incomplete. Nothing is wrong with this photo.
-          </StatusBanner>
-        )}
-        {state.status === "error" && <StatusBanner tone="error">{state.message}</StatusBanner>}
-        {state.status === "ready" && state.items.length === 0 && (
-          <p className="m-0 rounded-md border border-dashed border-line-strong bg-sunken p-md text-center text-sm text-muted">
-            No related photos. Nothing else in the library has a close enough AI description.
-          </p>
-        )}
-        {state.items.length > 0 && (
-          <ol className="m-0 flex list-none flex-col gap-xs p-0">
-            {state.items.map((result) => (
-              <RelatedRow key={result.photo.id} result={result} onOpenRelated={onOpenRelated} />
-            ))}
-          </ol>
-        )}
+      <div class="grid gap-sm" aria-live="polite">
+        <Show when={computed(() => state.value.status === "loading")}>
+          {() => (
+            <p class="m-0 text-sm text-muted">Finding photos with related descriptions&hellip;</p>
+          )}
+        </Show>
+        <Show when={computed(() => state.value.status === "not_indexed")}>
+          {() => (
+            <StatusBanner tone="info">
+              <strong>Not indexed yet.</strong> This photo&rsquo;s AI description has not reached
+              the search index. That normally takes a few seconds after processing — reopen this
+              panel shortly.
+            </StatusBanner>
+          )}
+        </Show>
+        <Show when={computed(() => state.value.status === "provider_unavailable")}>
+          {() => (
+            <StatusBanner tone="warning">
+              <strong>Related photos are unavailable right now.</strong> The vector index could not
+              be reached, so this list is incomplete. Nothing is wrong with this photo.
+            </StatusBanner>
+          )}
+        </Show>
+        <Show when={computed(() => state.value.status === "error")}>
+          {() => <StatusBanner tone="error">{computed(() => state.value.message)}</StatusBanner>}
+        </Show>
+        <Show
+          when={computed(() => state.value.status === "ready" && state.value.items.length === 0)}
+        >
+          {() => (
+            <p class="m-0 rounded-md border border-dashed border-line-strong bg-sunken p-md text-center text-sm text-muted">
+              No related photos. Nothing else in the library has a close enough AI description.
+            </p>
+          )}
+        </Show>
+        <Show when={computed(() => state.value.items.length > 0)}>
+          {() => (
+            <ol class="m-0 flex list-none flex-col gap-xs p-0">
+              <For each={computed(() => state.value.items)} by={(result) => result.photo.id}>
+                {(result) => <RelatedRow result={result} onOpenRelated={onOpenRelated} />}
+              </For>
+            </ol>
+          )}
+        </Show>
       </div>
     </aside>
   );
@@ -216,30 +249,30 @@ function RelatedRow({
   result,
   onOpenRelated,
 }: {
-  result: RelatedPhotoResult;
+  result: ReadonlySignal<RelatedPhotoResult>;
   onOpenRelated(photo: PhotoSummary): void;
 }) {
-  const label = photoLabel(result.photo);
+  const label = computed(() => photoLabel(result.value.photo));
   return (
     <li>
       <button
         type="button"
-        className="grid-related-row grid min-h-control w-full cursor-pointer items-center gap-xs rounded-sm border-0 bg-transparent p-3xs text-start hover-safe:bg-sunken active:bg-sunken"
-        aria-label={`Show photos related to ${label}`}
-        onClick={() => onOpenRelated(result.photo)}
+        class="grid-related-row grid min-h-control w-full cursor-pointer items-center gap-xs rounded-sm border-0 bg-transparent p-3xs text-start active:bg-sunken"
+        aria-label={computed(() => `Show photos related to ${label.value}`)}
+        on:click={() => onOpenRelated(result.value.photo)}
       >
         <img
-          className="aspect-square h-auto w-thumb-sm rounded-sm bg-sunken object-cover"
-          src={result.photo.mediaUrl}
+          class="aspect-square h-auto w-thumb-sm rounded-sm bg-sunken object-cover"
+          src={computed(() => result.value.photo.mediaUrl)}
           alt=""
-          width={result.photo.width}
-          height={result.photo.height}
+          width={computed(() => result.value.photo.width)}
+          height={computed(() => result.value.photo.height)}
           loading="lazy"
           decoding="async"
         />
-        <span className="min-w-0 truncate text-xs">{label}</span>
-        <span className="text-end text-xs text-muted tabular-nums" title="Description match score">
-          {result.reason.score.toFixed(2)}
+        <span class="min-w-0 truncate text-xs">{label}</span>
+        <span class="text-end text-xs text-muted tabular-nums" title="Description match score">
+          {computed(() => result.value.reason.score.toFixed(2))}
         </span>
       </button>
     </li>

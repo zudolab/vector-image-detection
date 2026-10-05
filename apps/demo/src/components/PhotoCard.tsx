@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  computed,
+  For,
+  getScope,
+  Show,
+  signal,
+  type ReadonlySignal,
+  type Ref,
+} from "@takazudo/zfb/zudo-react";
 import { fetchPhotoDetail, type PhotoLibraryClient } from "../lib/photo-library-client";
 import type { PhotoSummary } from "../worker/contracts/domain";
 
@@ -11,25 +19,36 @@ export function PhotoCard({
   onRemoveTag,
   onShowRelated,
 }: {
-  photo: PhotoSummary;
-  selected: boolean;
-  disabled: boolean;
+  photo: ReadonlySignal<PhotoSummary>;
+  selected: ReadonlySignal<boolean>;
+  disabled: ReadonlySignal<boolean>;
   client: PhotoLibraryClient;
   onSelect(photoId: string): void;
   onRemoveTag(photoId: string, tag: string): void;
   onShowRelated(photo: PhotoSummary): void;
 }) {
-  const [caption, setCaption] = useState<string | null>(null);
-  const articleRef = useRef<HTMLElement>(null);
+  const scope = getScope();
+  const caption = signal<string | null>(null);
+  const articleRef: Ref<HTMLElement> = { current: null };
+  // Signals suppress equal writes; a computed ID still invalidates on tag updates.
+  const photoId = signal(photo.value.id);
+  scope.effect(() => {
+    photoId.value = photo.value.id;
+  });
+  const checked = signal(selected.value);
+  scope.effect(() => {
+    checked.value = selected.value;
+  });
 
-  useEffect(() => {
+  scope.effect(() => {
+    const id = photoId.value;
     let active = true;
-    setCaption(null);
+    caption.value = null;
 
     const loadCaption = () => {
-      fetchPhotoDetail(client, photo.id)
+      fetchPhotoDetail(client, id)
         .then((detail) => {
-          if (active) setCaption(detail.aiCaption);
+          if (active) caption.value = detail.aiCaption;
         })
         .catch(() => {
           // Caption is an enhancement, not core gallery functionality — a
@@ -40,8 +59,7 @@ export function PhotoCard({
     // A gallery page can render up to 100 cards at once; fetching every
     // card's detail on mount would turn one page load into 100 detail
     // requests. Defer off-screen cards until they approach the viewport.
-    // jsdom (used by the dom test suite) has no IntersectionObserver, so
-    // tests fall back to the eager path below.
+    // Environments without IntersectionObserver load captions immediately.
     if (typeof IntersectionObserver === "undefined" || !articleRef.current) {
       loadCaption();
       return () => {
@@ -64,116 +82,150 @@ export function PhotoCard({
       active = false;
       observer.disconnect();
     };
-  }, [client, photo.id]);
+  });
 
   return (
     <article
       ref={articleRef}
-      className={`min-w-0 overflow-hidden rounded-lg border bg-surface ${selected ? "border-accent shadow-selected" : "border-line"}`}
+      class={computed(
+        () =>
+          `min-w-0 overflow-hidden rounded-lg border bg-surface ${selected.value ? "border-accent shadow-selected" : "border-line"}`,
+      )}
     >
-      <div className="relative aspect-[4/3] bg-sunken">
+      <div class="relative aspect-[4/3] bg-sunken">
         <img
-          className="h-full w-full object-cover"
-          src={photo.mediaUrl}
+          class="h-full w-full object-cover"
+          src={computed(() => photo.value.mediaUrl)}
           alt="Uploaded library photo"
-          width={photo.width}
-          height={photo.height}
+          width={computed(() => photo.value.width)}
+          height={computed(() => photo.value.height)}
           loading="lazy"
         />
-        <label className="absolute top-xs left-xs flex min-h-control min-w-control cursor-pointer items-center justify-center rounded-md bg-surface/95 px-sm font-semibold shadow-sm">
+        <label class="absolute top-xs left-xs flex min-h-control min-w-control cursor-pointer items-center justify-center rounded-md bg-surface/95 px-sm font-semibold">
           <input
-            className="mr-xs size-md accent-accent"
+            class="mr-xs size-md accent-accent"
             type="checkbox"
-            checked={selected}
-            onChange={() => onSelect(photo.id)}
-            aria-label={`Select photo ${photo.id}`}
+            modelChecked={checked}
+            on:change={() => onSelect(photo.value.id)}
+            aria-label={computed(() => `Select photo ${photo.value.id}`)}
           />
           Select
         </label>
       </div>
-      <div className="grid gap-md p-md">
-        {caption && (
-          <div>
-            <h3 className="m-0 text-sm font-semibold">AI description</h3>
-            <p className="mt-xs mb-0 text-sm text-ink">{caption}</p>
-          </div>
-        )}
+      <div class="grid gap-md p-md">
+        <Show when={computed(() => Boolean(caption.value))}>
+          {() => (
+            <div>
+              <h3 class="m-0 text-sm font-semibold">AI description</h3>
+              <p class="mt-xs mb-0 text-sm text-ink">{caption}</p>
+            </div>
+          )}
+        </Show>
         <button
           type="button"
-          className="min-h-control justify-self-start rounded-md border border-line-strong px-sm text-sm font-semibold hover-safe:bg-sunken"
-          aria-label={`Show photos related to photo ${photo.id} by AI description`}
-          onClick={() => onShowRelated(photo)}
+          class="min-h-control photo-related-button rounded-md border border-line-strong px-sm text-sm font-semibold"
+          aria-label={computed(
+            () => `Show photos related to photo ${photo.value.id} by AI description`,
+          )}
+          on:click={() => onShowRelated(photo.value)}
         >
           Related by AI description
         </button>
         <div>
-          <h3 className="m-0 text-sm font-semibold">AI suggested words</h3>
-          <div className="mt-xs flex flex-wrap gap-xs" aria-label="AI suggested words">
-            {photo.aiWords.length ? (
-              photo.aiWords.map((word) => (
-                <span
-                  key={`${word.modelRunId}:${word.normalizedWord}`}
-                  className="rounded-pill border border-ai-line bg-ai-soft px-sm py-3xs text-xs text-ai-ink"
+          <h3 class="m-0 text-sm font-semibold">AI suggested words</h3>
+          <div class="mt-xs flex flex-wrap gap-xs" aria-label="AI suggested words">
+            <Show
+              when={computed(() => photo.value.aiWords.length > 0)}
+              fallback={() => <span class="text-sm text-muted">No AI words yet</span>}
+            >
+              {() => (
+                <For
+                  each={computed(() => photo.value.aiWords)}
+                  by={(word) => `${word.modelRunId}:${word.normalizedWord}`}
                 >
-                  AI · {word.word}
-                </span>
-              ))
-            ) : (
-              <span className="text-sm text-muted">No AI words yet</span>
-            )}
+                  {(word) => (
+                    <span class="rounded-pill border border-ai-line bg-ai-soft px-sm py-3xs text-xs text-ai-ink">
+                      AI · {computed(() => word.value.word)}
+                    </span>
+                  )}
+                </For>
+              )}
+            </Show>
           </div>
         </div>
         <div>
-          <h3 className="m-0 text-sm font-semibold">Human tags</h3>
-          <div className="mt-xs flex flex-wrap gap-xs" aria-label="Human tags">
-            {photo.humanTags.length ? (
-              photo.humanTags.map((tag) => (
-                <span
-                  key={tag.id}
-                  className="inline-flex min-h-control items-center rounded-pill border border-human-line bg-human-soft pl-sm text-xs text-human-ink"
-                >
-                  Human · {tag.name}
-                  <button
-                    type="button"
-                    className="ml-3xs min-h-control min-w-control rounded-pill font-semibold disabled:cursor-not-allowed disabled:opacity-50 hover-safe:bg-surface focus-visible:outline-2"
-                    disabled={disabled}
-                    onClick={() => onRemoveTag(photo.id, tag.name)}
-                    aria-label={`Remove human tag ${tag.name} from photo ${photo.id}`}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))
-            ) : (
-              <span className="text-sm text-muted">No human tags</span>
-            )}
+          <h3 class="m-0 text-sm font-semibold">Human tags</h3>
+          <div class="mt-xs flex flex-wrap gap-xs" aria-label="Human tags">
+            <Show
+              when={computed(() => photo.value.humanTags.length > 0)}
+              fallback={() => <span class="text-sm text-muted">No human tags</span>}
+            >
+              {() => (
+                <For each={computed(() => photo.value.humanTags)} by={(tag) => tag.id}>
+                  {(tag) => (
+                    <span class="inline-flex min-h-control items-center rounded-pill border border-human-line bg-human-soft pl-sm text-xs text-human-ink">
+                      Human · {computed(() => tag.value.name)}
+                      <button
+                        type="button"
+                        class="ml-3xs min-h-control min-w-control rounded-pill font-semibold disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2"
+                        disabled={disabled}
+                        on:click={() => onRemoveTag(photo.value.id, tag.value.name)}
+                        aria-label={computed(
+                          () => `Remove human tag ${tag.value.name} from photo ${photo.value.id}`,
+                        )}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )}
+                </For>
+              )}
+            </Show>
           </div>
         </div>
-        {photo.attribution && (
-          <p className="m-0 text-xs text-muted">
-            Source:{" "}
-            {photo.attribution.sourceUrl ? (
-              <a className="underline" href={photo.attribution.sourceUrl}>
-                {photo.attribution.authorName ?? "original source"}
-              </a>
-            ) : (
-              (photo.attribution.authorName ?? "seed collection")
-            )}
-            {photo.attribution.licenseName ? (
-              <>
-                {" "}
-                ·{" "}
-                {photo.attribution.licenseUrl ? (
-                  <a className="underline" href={photo.attribution.licenseUrl}>
-                    {photo.attribution.licenseName}
+        <Show when={computed(() => Boolean(photo.value.attribution))}>
+          {() => (
+            <p class="m-0 text-xs text-muted">
+              Source:{" "}
+              <Show
+                when={computed(() => Boolean(photo.value.attribution?.sourceUrl))}
+                fallback={() =>
+                  computed(() => photo.value.attribution?.authorName ?? "seed collection")
+                }
+              >
+                {() => (
+                  <a
+                    class="underline"
+                    href={computed(() => photo.value.attribution?.sourceUrl ?? "")}
+                  >
+                    {computed(() => photo.value.attribution?.authorName ?? "original source")}
                   </a>
-                ) : (
-                  photo.attribution.licenseName
                 )}
-              </>
-            ) : null}
-          </p>
-        )}
+              </Show>
+              <Show when={computed(() => Boolean(photo.value.attribution?.licenseName))}>
+                {() => (
+                  <>
+                    {" "}
+                    ·{" "}
+                    <Show
+                      when={computed(() => Boolean(photo.value.attribution?.licenseUrl))}
+                      fallback={() => computed(() => photo.value.attribution?.licenseName)}
+                    >
+                      {() => (
+                        <a
+                          class="underline"
+                          href={computed(() => photo.value.attribution?.licenseUrl ?? "")}
+                        >
+                          {computed(() => photo.value.attribution?.licenseName)}
+                        </a>
+                      )}
+                    </Show>
+                  </>
+                )}
+              </Show>
+            </p>
+          )}
+        </Show>
       </div>
     </article>
   );

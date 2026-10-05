@@ -1,9 +1,27 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { createIslandTest, type IslandTest } from "@takazudo/zfb/zudo-react/testing";
+import { intersectionObservers, intersectObservedElements } from "../tests/dom-setup";
+import { fireEvent, screen, waitFor, within } from "@testing-library/dom";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ApiClientError, type PhotoLibraryClient } from "./lib/photo-library-client";
 import type { PhotoSummary } from "./worker/contracts/domain";
+
+const islands: IslandTest[] = [];
+async function renderApp(client: PhotoLibraryClient) {
+  function TestApp() {
+    return <App client={client} />;
+  }
+  const island = createIslandTest(TestApp, {}, { document });
+  islands.push(island);
+  expect(island.hydrate()).not.toBeNull();
+  await island.flush();
+  expect(island.diagnostics).toEqual([]);
+  return island;
+}
+afterEach(() => {
+  for (const island of islands.splice(0)) island.dispose();
+});
 
 const photo = (id = "photo-1"): PhotoSummary => ({
   id,
@@ -145,7 +163,7 @@ describe("public photo library", () => {
   it("keeps the native multi-file input baseline and gives local validation before API upload", async () => {
     const uploadPhoto = vi.fn<PhotoLibraryClient["uploadPhoto"]>();
     const client = fakeClient({ uploadPhoto });
-    render(<App client={client} />);
+    await renderApp(client);
     const input = await screen.findByLabelText(/choose photos/i);
     expect((input as HTMLInputElement).type).toBe("file");
     expect((input as HTMLInputElement).multiple).toBe(true);
@@ -167,7 +185,7 @@ describe("public photo library", () => {
       }),
     });
     const user = userEvent.setup();
-    render(<App client={client} />);
+    await renderApp(client);
     await user.upload(
       await screen.findByLabelText(/choose photos/i),
       new File(["image"], "cat.jpg", { type: "image/jpeg" }),
@@ -190,7 +208,7 @@ describe("public photo library", () => {
       checks: [],
     });
     const client = fakeClient({ readiness });
-    render(<App client={client} />);
+    await renderApp(client);
     expect(await screen.findByText(/Gallery is read-only/)).toBeTruthy();
     expect((screen.getByLabelText(/choose photos/i) as HTMLInputElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "Search" }) as HTMLButtonElement).disabled).toBe(
@@ -215,7 +233,7 @@ describe("public photo library", () => {
       ],
     }));
     const user = userEvent.setup();
-    render(<App client={fakeClient({ mutateTags })} />);
+    await renderApp(fakeClient({ mutateTags }));
     await user.click(await screen.findByRole("checkbox", { name: /select photo photo-1/i }));
     const form = screen.getByRole("heading", { name: /edit selected photos/i }).closest("section")!;
     await user.type(within(form).getByLabelText("Human tag"), "garden");
@@ -226,6 +244,7 @@ describe("public photo library", () => {
     await user.click(within(form).getByRole("button", { name: "Remove human tag" }));
     expect(mutateTags).toHaveBeenLastCalledWith(
       expect.objectContaining({ action: "remove", humanTagNames: ["garden"] }),
+      expect.any(AbortSignal),
     );
   });
 
@@ -248,7 +267,7 @@ describe("public photo library", () => {
       }),
     });
     const user = userEvent.setup();
-    render(<App client={client} />);
+    await renderApp(client);
     expect((await screen.findAllByLabelText("AI suggested words"))[0]?.textContent).toContain(
       "AI · Cat",
     );
@@ -286,7 +305,7 @@ describe("public photo library", () => {
           }),
     );
     const user = userEvent.setup();
-    render(<App client={fakeClient({ search })} />);
+    const view = await renderApp(fakeClient({ search }));
     const field = await screen.findByLabelText("Words or description");
     await user.type(field, "old");
     await user.click(screen.getByRole("button", { name: "Search" }));
@@ -302,6 +321,8 @@ describe("public photo library", () => {
       degradedReason: "stale warning",
       items: [],
     });
+    await old;
+    await view.flush();
     await waitFor(() => expect(screen.queryByText(/stale warning/)).toBeNull());
     expect(screen.getByLabelText("Search results for new")).toBeTruthy();
   });
@@ -326,7 +347,7 @@ describe("public photo library", () => {
       ],
     }));
     const user = userEvent.setup();
-    render(<App client={fakeClient({ relatedPhotos })} />);
+    await renderApp(fakeClient({ relatedPhotos }));
 
     expect(screen.queryByRole("complementary")).toBeNull();
     await user.click(
@@ -368,11 +389,11 @@ describe("public photo library", () => {
       items: [],
     }));
     const user = userEvent.setup();
-    render(<App client={fakeClient({ getPhoto, relatedPhotos })} />);
+    await renderApp(fakeClient({ getPhoto, relatedPhotos }));
 
-    // PhotoCard's own detail fetch (eager in jsdom, which has no
-    // IntersectionObserver) — wait for the caption it produces so the request
-    // is guaranteed to have resolved before the panel opens for the same photo.
+    await screen.findByRole("img", { name: /uploaded library photo/i });
+    intersectObservedElements();
+    // Resolve the gallery caption before opening the panel for the same photo.
     await screen.findByText("A cat sitting on a sunlit windowsill");
     expect(getPhoto).toHaveBeenCalledTimes(1);
 
@@ -401,13 +422,13 @@ describe("public photo library", () => {
       return new Promise(() => undefined);
     };
     const user = userEvent.setup();
-    const view = render(<App client={fakeClient({ uploadStatus })} />);
+    const view = await renderApp(fakeClient({ uploadStatus }));
     await user.upload(
       await screen.findByLabelText(/choose photos/i),
       new File(["image"], "pending.jpg", { type: "image/jpeg" }),
     );
     await waitFor(() => expect(pollingSignal).toBeDefined());
-    view.unmount();
+    view.dispose();
     expect(pollingSignal?.aborted).toBe(true);
   });
 
@@ -423,8 +444,11 @@ describe("public photo library", () => {
         reindexRequiredRevision: null,
       },
     }));
-    render(<App client={fakeClient({ getPhoto })} />);
+    await renderApp(fakeClient({ getPhoto }));
+    await screen.findByRole("img", { name: /uploaded library photo/i });
+    intersectObservedElements();
     expect(await screen.findByText("A cat sitting on a sunlit windowsill")).toBeTruthy();
+    expect(intersectionObservers[0]?.disconnect).toHaveBeenCalled();
     expect(screen.getByRole("heading", { name: "AI description" })).toBeTruthy();
     expect(getPhoto).toHaveBeenCalledWith("photo-1");
   });
@@ -441,15 +465,179 @@ describe("public photo library", () => {
         reindexRequiredRevision: null,
       },
     }));
-    render(<App client={fakeClient({ getPhoto })} />);
+    await renderApp(fakeClient({ getPhoto }));
     await screen.findByRole("img", { name: /uploaded library photo/i });
+    intersectObservedElements();
     await waitFor(() => expect(getPhoto).toHaveBeenCalledWith("photo-1"));
     expect(screen.queryByRole("heading", { name: "AI description" })).toBeNull();
     expect(screen.queryByText(/A cat sitting/)).toBeNull();
   });
 
+  it("disconnects pending caption observers and ignores late detail results after disposal", async () => {
+    let resolveDetail!: (detail: Awaited<ReturnType<PhotoLibraryClient["getPhoto"]>>) => void;
+    const detail = new Promise<Awaited<ReturnType<PhotoLibraryClient["getPhoto"]>>>((resolve) => {
+      resolveDetail = resolve;
+    });
+    const getPhoto = vi.fn<PhotoLibraryClient["getPhoto"]>(() => detail);
+    const view = await renderApp(fakeClient({ getPhoto }));
+    const image = await screen.findByRole("img", { name: /uploaded library photo/i });
+    const article = image.closest("article")!;
+    expect(getPhoto).not.toHaveBeenCalled();
+    expect(intersectionObservers[0]?.targets.has(article)).toBe(true);
+    intersectObservedElements();
+    await waitFor(() => expect(getPhoto).toHaveBeenCalledTimes(1));
+    expect(intersectionObservers[0]?.disconnect).toHaveBeenCalledTimes(1);
+    view.dispose();
+    expect(intersectionObservers[0]?.disconnect).toHaveBeenCalledTimes(2);
+    resolveDetail({
+      version: "v1",
+      photo: {
+        ...photo(),
+        byteSize: 10,
+        sha256: "x",
+        aiCaption: "Late caption",
+        canonicalIndexedRevision: 1,
+        reindexRequiredRevision: null,
+      },
+    });
+    await detail;
+    await view.flush();
+    expect(article.textContent).not.toContain("Late caption");
+    expect(screen.queryByRole("img", { name: /uploaded library photo/i })).toBeNull();
+  });
+
+  it("keeps selection and keyed card tags live across mutations and search navigation", async () => {
+    const user = userEvent.setup();
+    const client = fakeClient();
+    await renderApp(client);
+    const checkbox = (await screen.findByRole("checkbox", {
+      name: /select photo photo-1/i,
+    })) as HTMLInputElement;
+    await user.click(screen.getByRole("button", { name: "Select all" }));
+    expect(checkbox.checked).toBe(true);
+    expect(screen.getByText("1 selected")).toBeTruthy();
+    await user.type(screen.getByLabelText("Human tag"), "garden");
+    await user.click(screen.getByRole("button", { name: "Attach human tag" }));
+    await screen.findByRole("button", { name: /remove human tag garden/i });
+    expect(screen.getByRole("checkbox", { name: /select photo photo-1/i })).toBe(checkbox);
+    expect(screen.queryByRole("button", { name: /remove human tag favorite/i })).toBeNull();
+    await user.type(screen.getByLabelText("Words or description"), "cat");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByLabelText("Search results for cat");
+    await user.click(screen.getByRole("button", { name: "Clear search" }));
+    const restored = (await screen.findByRole("checkbox", {
+      name: /select photo photo-1/i,
+    })) as HTMLInputElement;
+    expect(restored.checked).toBe(true);
+    expect(screen.getByRole("button", { name: /remove human tag garden/i })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Clear selection" }));
+    expect(restored.checked).toBe(false);
+    expect(screen.getByText("0 selected")).toBeTruthy();
+  });
+
+  it("copies native selected files before clearing the input and uploads their original objects", async () => {
+    const uploadPhoto = vi.fn<PhotoLibraryClient["uploadPhoto"]>(async () => ({
+      version: "v1",
+      operationId: "operation-1",
+      photoId: "photo-2",
+      state: "completed",
+      retryable: false,
+      errorCode: null,
+      updatedAt: "2026-08-10T00:00:01.000Z",
+    }));
+    const user = userEvent.setup();
+    await renderApp(fakeClient({ uploadPhoto }));
+    const input = (await screen.findByLabelText(/choose photos/i)) as HTMLInputElement;
+    const files = [
+      new File(["first"], "first.jpg", { type: "image/jpeg" }),
+      new File(["second"], "second.png", { type: "image/png" }),
+    ];
+    await user.upload(input, files);
+    expect(input.value).toBe("");
+    expect(uploadPhoto).toHaveBeenCalledTimes(2);
+    expect(uploadPhoto.mock.calls[0]?.[0]).toBe(files[0]);
+    expect(uploadPhoto.mock.calls[1]?.[0]).toBe(files[1]);
+    expect(uploadPhoto.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
+    await screen.findByText("first.jpg");
+    await screen.findByText("second.png");
+  });
+
+  it("aborts pending tag mutation on disposal and cannot update a later App instance", async () => {
+    let release!: (value: Awaited<ReturnType<PhotoLibraryClient["mutateTags"]>>) => void;
+    const pending = new Promise<Awaited<ReturnType<PhotoLibraryClient["mutateTags"]>>>(
+      (resolve) => {
+        release = resolve;
+      },
+    );
+    const mutateTags = vi.fn<PhotoLibraryClient["mutateTags"]>(() => pending);
+    const user = userEvent.setup();
+    const first = await renderApp(fakeClient({ mutateTags }));
+    await user.click(await screen.findByRole("checkbox", { name: /select photo photo-1/i }));
+    await user.type(screen.getByLabelText("Human tag"), "old-tag");
+    await user.click(screen.getByRole("button", { name: "Attach human tag" }));
+    expect(mutateTags).toHaveBeenCalledTimes(1);
+    const abortSignal = mutateTags.mock.calls[0]?.[1];
+    expect(abortSignal?.aborted).toBe(false);
+    first.dispose();
+    expect(abortSignal?.aborted).toBe(true);
+    await renderApp(fakeClient());
+    release({ version: "v1", results: [] });
+    await pending;
+    await first.flush();
+    expect(screen.queryByText(/Attached “old-tag”/)).toBeNull();
+    expect(screen.getByText("0 selected")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /remove human tag favorite/i })).toBeTruthy();
+  });
+
+  it("retains the related panel while following a neighbour and restores the original opener", async () => {
+    const relatedPhotos = vi.fn<PhotoLibraryClient["relatedPhotos"]>(async (photoId) => ({
+      version: "v1",
+      photoId,
+      nextCursor: null,
+      degraded: false,
+      degradedReason: null,
+      items:
+        photoId === "photo-1"
+          ? [
+              {
+                photo: { ...photo("photo-2"), humanTags: [] },
+                reason: {
+                  tier: "semantic",
+                  score: 0.8,
+                  vectorId: "photo-2:1",
+                  indexedDocumentRevision: 1,
+                },
+              },
+            ]
+          : [],
+    }));
+    const user = userEvent.setup();
+    await renderApp(fakeClient({ relatedPhotos }));
+    const opener = await screen.findByRole("button", {
+      name: /Show photos related to photo photo-1 by AI description/i,
+    });
+    await user.click(opener);
+    const panel = await screen.findByRole("complementary");
+    await user.click(
+      await within(panel).findByRole("button", { name: "Show photos related to Cat" }),
+    );
+    await waitFor(() =>
+      expect(relatedPhotos).toHaveBeenLastCalledWith("photo-2", expect.any(AbortSignal)),
+    );
+    expect(screen.getByRole("complementary")).toBe(panel);
+    expect(document.activeElement).toBe(panel);
+    expect(within(panel).getByRole("presentation").getAttribute("src")).toBe(
+      "/api/v1/photos/photo-2/media",
+    );
+    await user.click(
+      within(panel).getByRole("button", { name: /close the related photos panel/i }),
+    );
+    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(document.activeElement).toBe(opener);
+  });
+
   it("exposes deterministic responsive intent in markup", async () => {
-    render(<App client={fakeClient()} />);
+    await renderApp(fakeClient());
     const image = await screen.findByRole("img", { name: /uploaded library photo/i });
     expect((image as HTMLImageElement).width).toBe(1200);
     expect((image as HTMLImageElement).height).toBe(800);
