@@ -27,8 +27,8 @@
     "test:seed": "node --test scripts/seed-manifest.node-test.mjs && vitest run --config vitest.worker.config.ts src/worker/features/photos/seed.integration.worker.test.ts"
   },
   "dependencies": {
-    "@takazudo/zfb": "3.2.0",
-    "@takazudo/zfb-runtime": "3.2.0",
+    "@takazudo/zfb": "4.3.0",
+    "@takazudo/zfb-runtime": "4.3.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
